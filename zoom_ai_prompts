@@ -1,0 +1,27 @@
+### Meeting Recaps
+```
+Please produce a meeting recap from this meeting so far, using exactly this structure:
+
+1. Decisions made: what was agreed, and who agreed to it.
+2. Action items: each with the owner's name, the task, and the deadline if one was stated. If no owner or deadline was stated, write "not specified".
+3. Concerns or risks raised: who raised each one, what it was, and how it was answered. Write "unanswered" if there was no response.
+4. Open questions: anything left unresolved or deferred, and who was expected to follow up.
+5. Next steps: the next meeting or checkpoint, if mentioned.
+
+Attribute statements to the named speaker. Do not infer or add anything that was not said. If something is unclear, mark it "unclear" instead of guessing.
+```
+
+### Confirmation
+```
+Based on this meeting so far, draft a short spoken confirmation that I can read aloud to the group in about 30 to 45 seconds. I am [your name].
+
+Start with "Let me confirm what we agreed before we close." Then list each point as a short, plain sentence, in this order:
+1. Decisions made.
+2. Action items, each as "[Name] will [task] by [date]". If no date was stated, say "no date was set yet".
+3. Any concern I raised, as "I raised [concern], and the response was [response]". If it was not answered, say "this is still open".
+4. Any open question and who will follow up.
+
+End with "Please let me know now if I missed or misstated anything, otherwise I will send this in writing today."
+
+Use only what was actually said, and attribute it to the right person. Do not add anything. Use short sentences with no jargon, so it is easy to read out loud.
+```
