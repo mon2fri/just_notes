@@ -1,0 +1,70 @@
+# Rule Sets Configuration
+
+## Shared Filter
+
+Shared scope filter (applies to all four rule sets)
+
+| Item | Setting |
+| --- | --- |
+| Book category | Exclude non-standard, non-trading books |
+| Book-name keywords | Exclude books whose name contains the agreed keywords (e.g. watch books belonging to another desk) |
+| Bloomberg | Taken out of scope |
+| X-Force | Put back at the end of the call so exceptions still show. Including it moves the count from 490 to 778 |
+| Net effect | Scope is about 4,000 books smaller than before (transcript is garbled on the baseline) |
+| Source: call transcript. All four rule sets use this same overall filter. |  |
+
+## 1 SA-BAU
+
+Rule set 1: SA-BAU (generic basic set)
+
+| Rule | Condition (filter) | Expectation | Notes |
+| --- | --- | --- | --- |
+| Trading book must be SA contributory | Trading book (pure trading, not IRT/ART). Exclude CVA = yes (removes the SA=no / CVA=yes population) | SA = yes | Keep expectation 1 only; drop old expectations 2-4. SA-only, does not referee between SA and CVA. |
+| Remaining pre-combined basic rules | Same shared filter | Unchanged | Take out of the current run and re-fence here. |
+| Presentation | n/a | n/a | Run first for the department head this afternoon: 'this is what goes to audit'. |
+| Open point | Possible second expectation to flag yes/yes books | Not settled | May stay here or move to the cross SA-CVA set. |
+
+## 2 CVA
+
+Rule set 2: CVA (pure SA-CVA / XVA)
+
+| Rule | Condition (filter) | Expectation | Notes |
+| --- | --- | --- | --- |
+| CVA basic rules | CVA/XVA books only; ignore the SA flag | Book follows its own basic CVA logic | Fenced from SA. Not in scope of the audit yet. No specific rule IDs named in the transcript. |
+| XVA-desk-specific checks | XVA desk books | Not specified | Suggested: a separate rule block per desk (XVA, later equity or prime finance) so special treatment does not pollute the general rules. |
+| Known cleanup | Empty books and exposure books | n/a | Already cleaned up per ul0794. |
+| Run timing | n/a | n/a | Run after the call. |
+
+## 3 Cross SA-CVA
+
+Rule set 3: Cross SA-CVA (SA vs SA-CVA tracking)
+
+| Rule | Condition (filter) | Expectation | Notes | Count |
+| --- | --- | --- | --- | --- |
+| No coexistence across frameworks | Trading book | Not yes in both SA and SA-CVA | Currently 1 book yes/yes | 1 |
+| Trading book flagged no in both | Trading book, SA = no and CVA = no | Not both no | Mostly equity dual-booking books. Do not show or commit to fixing by year-end. | 489 |
+| Blank or null flags | SA or CVA empty/null | Flag any | Confirmed none exist | 0 |
+| Not an exception | SA = no, CVA = yes | Valid | Legitimate CVA-eligible books; excluded from the check |  |
+| Total exceptions (about 500) |  |  | Sum of the counts above is 490; transcript quotes roughly 500 | 490 |
+| Do not show this set to the department head this afternoon. Use later as management insight to ask for resources. |  |  |  |  |
+
+## 4 Analytics
+
+Rule set 4: Analytics (overarching, framework-agnostic)
+
+| Rule | Condition (filter) | Expectation | Notes |
+| --- | --- | --- | --- |
+| At least one BAU flag populated | FO or Traded Risk MO book, not non-standard/non-trading. Ideally only PnL-generating books, trading or banking | At least one of the four BAU flags = yes (not all blank or no) | Source: PRA finding. Department head asked HMS for a preemptive rule; this is an internal check ahead of that. Expect many exceptions (unused books). |
+| Anchor flag | Not decided | n/a | Unsure whether to anchor on book category or the PnL flag (field name unclear in transcript). |
+| HMS follow-up | n/a | HMS defaults the BAU flags to yes at booking | Action item for HMS, alongside the internal check. |
+| Presentation | n/a | n/a | Show as a separate, later item, not in the first presentation. |
+
+## Open Points
+
+Items to confirm with the team
+
+| # | Question | Why it matters |
+| --- | --- | --- |
+| 1 | Where does the yes/yes check from SA-BAU end up? | Not settled in the call (SA-BAU vs cross SA-CVA). |
+| 2 | Is the BAU-flag rule in Analytics or its own audit config? | Described both ways around 01:00 and 01:03. |
+| 3 | Which flag anchors the BAU-flag rule? | Book category vs PnL flag; field name unclear. |
