@@ -3,7 +3,8 @@
 
 Install: python -m pip install openpyxl
 Run: python excel_compare.py /path/to/reports
-Composite keys: --key-columns 1,2 (one-based positions within every table).
+Identifiers: first column plus recognized identifier headers in each table.
+Additional keys: --key-columns 1,2 (one-based positions within every table).
 The BASE workbook supplies report layout and formatting. Table title rows must
 have red fill and white text; column headers must have grey fill and bold black
 text. Blank rows separate tables. Formula cells compare their formula text.
@@ -26,6 +27,26 @@ from openpyxl.styles.colors import COLOR_INDEX
 COLORS = {'OK': '009970', 'Check': 'FF0000', 'Extra': 'FF8800', 'Missing': '990099'}
 PINK = PatternFill('solid', fgColor='FFD6DC')
 GREEN = PatternFill('solid', fgColor='DFEBD0')
+IDENTIFIER_HEADERS = frozenset(name.casefold() for name in (
+    'Mandate ID', 'Mandate measure label', 'Mandate Regulatory Treatment label',
+    'Exposure unit', 'COBDate', 'Measure', 'Rank', 'Currency Group',
+    'Currency Region', 'Currency', 'Risk Measure', 'Group', 'Regional Cross',
+    'Underlying', 'Category', 'SBM Correlation Type', 'Bucket', 'Curve Type',
+    'Metrics', 'Risk Type',
+))
+
+
+def table_keys(ws, table, additional_keys):
+    """Resolve identifiers separately for each table, regardless of column order."""
+    width = table.right - table.left + 1
+    if any(k < 0 or k >= width for k in additional_keys):
+        raise ValueError(f'{ws.title}/{table.title}: identifier column exceeds table width')
+    keys = {0, *additional_keys}
+    for index, col in enumerate(range(table.left, table.right + 1)):
+        header = ws.cell(table.header, col).value
+        if isinstance(header, str) and ' '.join(header.split()).casefold() in IDENTIFIER_HEADERS:
+            keys.add(index)
+    return sorted(keys)
 
 
 def rgb(color):
@@ -163,14 +184,15 @@ def identifier_cells(ws, keys):
     """Locate labels and row keys for wholly missing or extra sheets."""
     cells = set()
     for table in tables(ws):
+        resolved_keys = table_keys(ws, table, keys)
         for r in (table.title_row, table.header):
             cells.update((r, c) for c in range(table.left, table.right + 1))
-        cells.update((r, table.left + k) for r in table.rows for k in keys
+        cells.update((r, table.left + k) for r in table.rows for k in resolved_keys
                      if table.left + k <= table.right)
     return cells
 
 
-def compare_sheet(out, base, comp, keys):
+def compare_sheet(out, base, comp, additional_keys):
     bt, ct = tables(base), tables(comp)
     if not bt:
         raise ValueError(f'{base.title}: no formatted table headers detected')
@@ -178,6 +200,7 @@ def compare_sheet(out, base, comp, keys):
     # Process bottom-up so inserted rows do not move unprocessed BASE tables.
     for index in reversed(range(len(bt))):
         b = bt[index]
+        keys = table_keys(base, b, additional_keys)
         ci = table_pairs[index]
         if ci is None:
             for r in [b.header] + b.rows:
@@ -186,8 +209,6 @@ def compare_sheet(out, base, comp, keys):
                          retain=r == b.header or c - b.left in keys)
             continue
         c = ct[ci]
-        if max(keys) >= b.right - b.left + 1 or max(keys) >= c.right - c.left + 1:
-            raise ValueError(f'{base.title}/{b.title}: identifier column exceeds table width')
         bc = list(range(b.left, b.right + 1))
         cc = list(range(c.left, c.right + 1))
         col_pairs, extra_cols = match_indices(
@@ -240,6 +261,7 @@ def compare_sheet(out, base, comp, keys):
                 mark(out.cell((b.rows[-1] + 1 if b.rows else b.header + 1) + offset_row, dest), 'Extra', True)
     for ti in extra_tables:
         t = ct[ti]
+        keys = table_keys(comp, t, additional_keys)
         start = out.max_row + 3
         for offset, r in enumerate(range(t.title_row, (t.rows[-1] if t.rows else t.header) + 1)):
             for col in range(t.left, t.right + 1):
@@ -288,7 +310,9 @@ def compare(base_path, comp_path, result_path, keys):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('folder', nargs='?', type=Path, default=Path(__file__).resolve().parent)
-    parser.add_argument('--key-columns', default='1', help='Comma-separated one-based identifier column positions (default: 1)')
+    parser.add_argument('--key-columns', default='1',
+                        help='Additional one-based identifier columns, comma-separated; '
+                             'first column and recognized identifier headers are always included')
     args = parser.parse_args()
     try:
         keys = [int(k) - 1 for k in args.key_columns.split(',')]
