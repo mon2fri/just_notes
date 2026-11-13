@@ -7,6 +7,7 @@ Composite keys: --key-columns 1,2 (one-based positions within every table).
 The BASE workbook supplies report layout and formatting. Table title rows must
 have red fill and white text; column headers must have grey fill and bold black
 text. Blank rows separate tables. Formula cells compare their formula text.
+Row identifiers, column headers, and table titles retain their original values.
 """
 from __future__ import annotations
 
@@ -118,10 +119,11 @@ def match_indices(base, comp):
     return pairs, [i for i in range(len(comp)) if i not in used]
 
 
-def mark(cell, status, structural=False):
+def mark(cell, status, structural=False, retain=False):
     if isinstance(cell, MergedCell):
         return
-    cell.value = status
+    if not retain:
+        cell.value = status
     font = copy(cell.font)
     font.color = COLORS[status]
     cell.font = font
@@ -157,6 +159,17 @@ def insert_rows(ws, at, count):
         ws.merge_cells(str(area))
 
 
+def identifier_cells(ws, keys):
+    """Locate labels and row keys for wholly missing or extra sheets."""
+    cells = set()
+    for table in tables(ws):
+        for r in (table.title_row, table.header):
+            cells.update((r, c) for c in range(table.left, table.right + 1))
+        cells.update((r, table.left + k) for r in table.rows for k in keys
+                     if table.left + k <= table.right)
+    return cells
+
+
 def compare_sheet(out, base, comp, keys):
     bt, ct = tables(base), tables(comp)
     if not bt:
@@ -169,7 +182,8 @@ def compare_sheet(out, base, comp, keys):
         if ci is None:
             for r in [b.header] + b.rows:
                 for c in range(b.left, b.right + 1):
-                    mark(out.cell(r, c), 'Missing', True)
+                    mark(out.cell(r, c), 'Missing', True,
+                         retain=r == b.header or c - b.left in keys)
             continue
         c = ct[ci]
         if max(keys) >= b.right - b.left + 1 or max(keys) >= c.right - c.left + 1:
@@ -192,7 +206,7 @@ def compare_sheet(out, base, comp, keys):
             insert_rows(out, at, len(extra_rows))
         for j, col in enumerate(bc):
             if col_pairs[j] is None:
-                mark(out.cell(b.header, col), 'Missing', True)
+                mark(out.cell(b.header, col), 'Missing', True, retain=True)
         for ri, r in enumerate(b.rows):
             cr = row_pairs[ri]
             for j, col in enumerate(bc):
@@ -201,12 +215,17 @@ def compare_sheet(out, base, comp, keys):
                     'OK' if value_key(base.cell(r, col).value) == value_key(comp.cell(c.rows[cr], cc[cj]).value)
                     else 'Missing' if comp.cell(c.rows[cr], cc[cj]).value is None and base.cell(r, col).value is not None
                     else 'Check')
-                mark(out.cell(r, col), status, cr is None or cj is None)
+                mark(out.cell(r, col), status, cr is None or cj is None,
+                     retain=j in keys)
         for offset, cri in enumerate(extra_rows):
             r = (b.rows[-1] + 1 if b.rows else b.header + 1) + offset
-            for col in bc:
+            for j, col in enumerate(bc):
                 copy_cell(base.cell(b.rows[-1] if b.rows else b.header, col), out.cell(r, col))
-                mark(out.cell(r, col), 'Extra', True)
+                if j in keys:
+                    cj = col_pairs[j]
+                    out.cell(r, col).value = (comp.cell(c.rows[cri], cc[cj]).value
+                                              if cj is not None else None)
+                mark(out.cell(r, col), 'Extra', True, retain=j in keys)
         # Append extra columns within this table, preserving neighboring content.
         dest_left = b.right + 1
         if extra_cols and any(out.cell(r, col).value is not None for r in [b.header] + b.rows for col in range(dest_left, dest_left + len(extra_cols))):
@@ -214,7 +233,7 @@ def compare_sheet(out, base, comp, keys):
         for offset, cj in enumerate(extra_cols):
             dest = dest_left + offset
             copy_cell(comp.cell(c.header, cc[cj]), out.cell(b.header, dest))
-            mark(out.cell(b.header, dest), 'Extra', True)
+            mark(out.cell(b.header, dest), 'Extra', True, retain=True)
             for r in b.rows:
                 mark(out.cell(r, dest), 'Extra', True)
             for offset_row in range(len(extra_rows)):
@@ -225,7 +244,8 @@ def compare_sheet(out, base, comp, keys):
         for offset, r in enumerate(range(t.title_row, (t.rows[-1] if t.rows else t.header) + 1)):
             for col in range(t.left, t.right + 1):
                 copy_cell(comp.cell(r, col), out.cell(start + offset, col))
-                mark(out.cell(start + offset, col), 'Extra', True)
+                mark(out.cell(start + offset, col), 'Extra', True,
+                     retain=r <= t.header or col - t.left in keys)
 
 
 def compare(base_path, comp_path, result_path, keys):
@@ -237,18 +257,22 @@ def compare(base_path, comp_path, result_path, keys):
             if name in comp.sheetnames:
                 compare_sheet(out[name], base[name], comp[name], keys)
             else:
+                identifiers = identifier_cells(base[name], keys)
                 for row in out[name]:
                     for cell in row:
                         if cell.value is not None and cell.__class__.__name__ != 'MergedCell':
-                            mark(cell, 'Missing', True)
+                            mark(cell, 'Missing', True,
+                                 retain=(cell.row, cell.column) in identifiers)
         for name in comp.sheetnames:
             if name not in base.sheetnames:
                 ws = out.create_sheet(name)
+                identifiers = identifier_cells(comp[name], keys)
                 for row in comp[name]:
                     for cell in row:
                         if cell.value is not None:
                             copy_cell(cell, ws.cell(cell.row, cell.column))
-                            mark(ws.cell(cell.row, cell.column), 'Extra', True)
+                            mark(ws.cell(cell.row, cell.column), 'Extra', True,
+                                 retain=(cell.row, cell.column) in identifiers)
         temp = result_path.with_suffix('.tmp.xlsx')
         try:
             out.save(temp)
