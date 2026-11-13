@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+"""Compare styled report workbooks. Requires Python 3.12+ and openpyxl.
+
+Install: python -m pip install openpyxl
+Run: python excel_compare.py /path/to/reports
+Composite keys: --key-columns 1,2 (one-based positions within every table).
+The BASE workbook supplies report layout and formatting. Table title rows must
+have red fill and white text; column headers must have grey fill and bold black
+text. Blank rows separate tables. Formula cells compare their formula text.
+"""
+from __future__ import annotations
+
+import argparse
+from collections import defaultdict, deque
+from copy import copy
+from dataclasses import dataclass
+from pathlib import Path
+import sys
+
+from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
+from openpyxl.styles import PatternFill
+from openpyxl.styles.colors import COLOR_INDEX
+
+COLORS = {'OK': '009970', 'Check': 'FF0000', 'Extra': 'FF8800', 'Missing': '990099'}
+PINK = PatternFill('solid', fgColor='FFD6DC')
+GREEN = PatternFill('solid', fgColor='DFEBD0')
+
+
+def rgb(color):
+    if color is None:
+        return None
+    if color.type == 'rgb':
+        return color.rgb[-6:].upper()
+    if color.type == 'indexed' and color.indexed < len(COLOR_INDEX):
+        return COLOR_INDEX[color.indexed][-6:].upper()
+    # Standard Office theme: light1, dark1, light2, dark2.
+    if color.type == 'theme':
+        return {0: 'FFFFFF', 1: '000000', 2: 'E7E6E6', 3: '44546A'}.get(color.theme)
+    return None
+
+
+def header_kind(cell):
+    if cell.value is None or cell.fill.patternType != 'solid':
+        return None
+    fill, font = rgb(cell.fill.fgColor), rgb(cell.font.color)
+    if not fill:
+        return None
+    r, g, b = (int(fill[i:i + 2], 16) for i in (0, 2, 4))
+    if r > 100 and r > g * 1.4 and r > b * 1.4 and font == 'FFFFFF':
+        return 'title'
+    if max(r, g, b) - min(r, g, b) < 20 and 65 < r < 245 and cell.font.bold and font in (None, '000000'):
+        return 'columns'
+    return None
+
+
+@dataclass
+class Table:
+    title: str
+    title_row: int
+    header: int
+    left: int
+    right: int
+    rows: list[int]
+
+
+def tables(ws):
+    titles = []
+    result = []
+    for row in ws:
+        red = [c for c in row if header_kind(c) == 'title']
+        if red:
+            titles.append((row[0].row, ' | '.join(str(c.value) for c in red)))
+        grey = [c for c in row if header_kind(c) == 'columns']
+        if not grey:
+            continue
+        # Separate disjoint header bands, allowing independent side-by-side tables.
+        bands = []
+        for cell in grey:
+            if not bands or cell.column > bands[-1][-1].column + 1:
+                bands.append([])
+            bands[-1].append(cell)
+        for band in bands:
+            left, right = band[0].column, band[-1].column
+            for merged in ws.merged_cells.ranges:
+                if merged.min_row <= row[0].row <= merged.max_row and merged.min_col <= right <= merged.max_col:
+                    right = max(right, merged.max_col)
+            title_row, title = titles[-1] if titles else (row[0].row, '')
+            result.append(Table(title, title_row, row[0].row, left, right, []))
+    for table in result:
+        for r in range(table.header + 1, ws.max_row + 1):
+            cells = [ws.cell(r, c) for c in range(table.left, table.right + 1)]
+            if any(header_kind(c) for c in cells) or all(c.value is None for c in cells):
+                break
+            table.rows.append(r)
+    return result
+
+
+def value_key(value):
+    # Keep boolean values distinct from numbers; preserve exact strings.
+    if isinstance(value, bool):
+        return ('bool', value)
+    if isinstance(value, (int, float)):
+        return ('number', value)
+    return (type(value).__name__, value)
+
+
+def match_indices(base, comp):
+    available = defaultdict(deque)
+    for i, value in enumerate(comp):
+        available[value].append(i)
+    pairs, used = [], set()
+    for value in base:
+        i = available[value].popleft() if available[value] else None
+        pairs.append(i)
+        if i is not None:
+            used.add(i)
+    return pairs, [i for i in range(len(comp)) if i not in used]
+
+
+def mark(cell, status, structural=False):
+    if isinstance(cell, MergedCell):
+        return
+    cell.value = status
+    font = copy(cell.font)
+    font.color = COLORS[status]
+    cell.font = font
+    if structural:
+        cell.fill = GREEN if status == 'Extra' else PINK
+    cell.comment = None
+
+
+def copy_cell(source, target):
+    target.value = source.value
+    if source.has_style:
+        target._style = copy(source._style)
+    target.number_format = source.number_format
+
+
+def insert_rows(ws, at, count):
+    # openpyxl does not move merged ranges or row dimensions on insertion.
+    ranges = [copy(area) for area in ws.merged_cells.ranges]
+    dimensions = {r: copy(dim) for r, dim in ws.row_dimensions.items() if r >= at}
+    for area in list(ws.merged_cells.ranges):
+        ws.unmerge_cells(str(area))
+    ws.insert_rows(at, count)
+    for r in sorted(dimensions, reverse=True):
+        del ws.row_dimensions[r]
+    for r, dim in dimensions.items():
+        dim.index = r + count
+        ws.row_dimensions[r + count] = dim
+    for area in ranges:
+        if area.min_row >= at:
+            area.shift(row_shift=count)
+        elif area.max_row >= at:
+            area.max_row += count
+        ws.merge_cells(str(area))
+
+
+def compare_sheet(out, base, comp, keys):
+    bt, ct = tables(base), tables(comp)
+    if not bt:
+        raise ValueError(f'{base.title}: no formatted table headers detected')
+    table_pairs, extra_tables = match_indices([t.title for t in bt], [t.title for t in ct])
+    # Process bottom-up so inserted rows do not move unprocessed BASE tables.
+    for index in reversed(range(len(bt))):
+        b = bt[index]
+        ci = table_pairs[index]
+        if ci is None:
+            for r in [b.header] + b.rows:
+                for c in range(b.left, b.right + 1):
+                    mark(out.cell(r, c), 'Missing', True)
+            continue
+        c = ct[ci]
+        if max(keys) >= b.right - b.left + 1 or max(keys) >= c.right - c.left + 1:
+            raise ValueError(f'{base.title}/{b.title}: identifier column exceeds table width')
+        bc = list(range(b.left, b.right + 1))
+        cc = list(range(c.left, c.right + 1))
+        col_pairs, extra_cols = match_indices(
+            [value_key(base.cell(b.header, col).value) for col in bc],
+            [value_key(comp.cell(c.header, col).value) for col in cc])
+        # Find identifier columns by their BASE header, supporting reordered columns.
+        comp_keys = [col_pairs[k] for k in keys]
+        if any(k is None for k in comp_keys):
+            row_pairs, extra_rows = [None] * len(b.rows), list(range(len(c.rows)))
+        else:
+            row_pairs, extra_rows = match_indices(
+                [tuple(value_key(base.cell(r, bc[k]).value) for k in keys) for r in b.rows],
+                [tuple(value_key(comp.cell(r, cc[k]).value) for k in comp_keys) for r in c.rows])
+        if extra_rows:
+            at = (b.rows[-1] + 1) if b.rows else b.header + 1
+            insert_rows(out, at, len(extra_rows))
+        for j, col in enumerate(bc):
+            if col_pairs[j] is None:
+                mark(out.cell(b.header, col), 'Missing', True)
+        for ri, r in enumerate(b.rows):
+            cr = row_pairs[ri]
+            for j, col in enumerate(bc):
+                cj = col_pairs[j]
+                status = 'Missing' if cr is None or cj is None else (
+                    'OK' if value_key(base.cell(r, col).value) == value_key(comp.cell(c.rows[cr], cc[cj]).value)
+                    else 'Missing' if comp.cell(c.rows[cr], cc[cj]).value is None and base.cell(r, col).value is not None
+                    else 'Check')
+                mark(out.cell(r, col), status, cr is None or cj is None)
+        for offset, cri in enumerate(extra_rows):
+            r = (b.rows[-1] + 1 if b.rows else b.header + 1) + offset
+            for col in bc:
+                copy_cell(base.cell(b.rows[-1] if b.rows else b.header, col), out.cell(r, col))
+                mark(out.cell(r, col), 'Extra', True)
+        # Append extra columns within this table, preserving neighboring content.
+        dest_left = b.right + 1
+        if extra_cols and any(out.cell(r, col).value is not None for r in [b.header] + b.rows for col in range(dest_left, dest_left + len(extra_cols))):
+            dest_left = out.max_column + 2
+        for offset, cj in enumerate(extra_cols):
+            dest = dest_left + offset
+            copy_cell(comp.cell(c.header, cc[cj]), out.cell(b.header, dest))
+            mark(out.cell(b.header, dest), 'Extra', True)
+            for r in b.rows:
+                mark(out.cell(r, dest), 'Extra', True)
+            for offset_row in range(len(extra_rows)):
+                mark(out.cell((b.rows[-1] + 1 if b.rows else b.header + 1) + offset_row, dest), 'Extra', True)
+    for ti in extra_tables:
+        t = ct[ti]
+        start = out.max_row + 3
+        for offset, r in enumerate(range(t.title_row, (t.rows[-1] if t.rows else t.header) + 1)):
+            for col in range(t.left, t.right + 1):
+                copy_cell(comp.cell(r, col), out.cell(start + offset, col))
+                mark(out.cell(start + offset, col), 'Extra', True)
+
+
+def compare(base_path, comp_path, result_path, keys):
+    base = load_workbook(base_path)
+    comp = load_workbook(comp_path)
+    out = load_workbook(base_path)
+    try:
+        for name in base.sheetnames:
+            if name in comp.sheetnames:
+                compare_sheet(out[name], base[name], comp[name], keys)
+            else:
+                for row in out[name]:
+                    for cell in row:
+                        if cell.value is not None and cell.__class__.__name__ != 'MergedCell':
+                            mark(cell, 'Missing', True)
+        for name in comp.sheetnames:
+            if name not in base.sheetnames:
+                ws = out.create_sheet(name)
+                for row in comp[name]:
+                    for cell in row:
+                        if cell.value is not None:
+                            copy_cell(cell, ws.cell(cell.row, cell.column))
+                            mark(ws.cell(cell.row, cell.column), 'Extra', True)
+        temp = result_path.with_suffix('.tmp.xlsx')
+        try:
+            out.save(temp)
+            temp.replace(result_path)
+        finally:
+            temp.unlink(missing_ok=True)
+    finally:
+        base.close()
+        comp.close()
+        out.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('folder', nargs='?', type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument('--key-columns', default='1', help='Comma-separated one-based identifier column positions (default: 1)')
+    args = parser.parse_args()
+    try:
+        keys = [int(k) - 1 for k in args.key_columns.split(',')]
+        if not keys or min(keys) < 0 or len(keys) != len(set(keys)):
+            raise ValueError
+    except ValueError:
+        parser.error('--key-columns must contain distinct positive integers')
+    if not args.folder.is_dir():
+        parser.error(f'Folder does not exist: {args.folder}')
+    failures, count = 0, 0
+    for comp in sorted(args.folder.glob('[[]REHEARSAL]*.xlsx')):
+        base = comp.with_name(comp.name[len('[REHEARSAL]'):])
+        if not base.is_file():
+            print(f'ERROR: missing baseline for {comp.name}', file=sys.stderr)
+            failures += 1
+            continue
+        result = base.with_name('[RESULT]' + base.name)
+        try:
+            compare(base, comp, result, keys)
+            count += 1
+            print(f'Created {result}')
+        except Exception as exc:
+            failures += 1
+            print(f'ERROR: {base.name}: {exc}', file=sys.stderr)
+    if count == 0 and failures == 0:
+        print('No [REHEARSAL]*.xlsx pairs found.', file=sys.stderr)
+    return 1 if failures else 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
